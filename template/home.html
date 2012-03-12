@@ -1,0 +1,14 @@
+<html>
+    <head>
+        <link rel="stylesheet" href="{{static_url('css/common.css')}}" type="text/css" />
+        <title>Scribe</title>
+    </head>
+    <body id="upload">
+        <h1>Welcome to Scribe</h1>
+        <p>Upload a sound file to get started.</p>
+        <form action="/" enctype="multipart/form-data" method="post">
+            <input type="file" name="sound" />
+            <input type="submit" value="Transcribe" />
+        </form>
+    </body>
+</html>

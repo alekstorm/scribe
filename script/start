@@ -1,0 +1,4 @@
+#!/bin/bash
+source bin/activate
+cd scribe
+python -B core.py $@

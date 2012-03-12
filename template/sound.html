@@ -1,0 +1,26 @@
+{% import json %}
+<html>
+  <head>
+    <title>Scribe - Sound</title>
+    <link href="{{static_url('css/common.css')}}" rel="stylesheet" type="text/css" />
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="https://raw.github.com/LearnBoost/socket.io-client/master/dist/socket.io.js"></script>
+    <script src="{{static_url('js/buzz.js')}}"></script>
+    <script src="{{static_url('js/easel.js')}}"></script>
+    <script src="{{static_url('js/scribe.js')}}"></script>
+    <script>
+        sound_info = {{json.dumps(info)}};
+    </script>
+  </head>
+  <body>
+    <div id="container">
+      <canvas id="base" width="1000" height="400"></canvas>
+      <canvas id="active" width="1000" height="400"></canvas>
+    </div>
+    <div id="chat">
+      <div id="chat-messages"></div>
+      <input type="text" id="chat-input" />
+    </div>
+    <button id="zoom-out">Zoom out</button>
+  </body>
+</html>

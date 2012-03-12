@@ -1,0 +1,10 @@
+/scribe/local_settings.py
+
+/static/javadoc/
+/static/js/scribe.js
+
+/bin/
+/build/
+/data/
+/include/
+/lib/
