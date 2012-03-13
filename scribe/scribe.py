@@ -1,6 +1,7 @@
 # FIXME re-enable gzip encoding
 import datetime
 from   gridfs import GridFS
+import httplib
 import os
 import pymongo
 from   math import exp, log, pi
@@ -13,14 +14,12 @@ from   tornado.template import Loader
 from   tornado.web import StaticFileHandler, Application as TornadoApplication
 from   tornado.util import ObjectDict
 import uuid
-from   vortex import Application, Resource
+from   vortex import Application, Resource, parse_range_header
 from   vortex.resources import DictResource, StaticFileResource
 from   vortex.responses import HTTPPreamble, HTTPFoundResponse, HTTPResponse
 import wave
 
 import settings
-
-from numpy import amax
 
 ROOT_DIR = os.path.join(os.path.dirname(__file__), os.pardir)
 STATIC_DIR = os.path.join(ROOT_DIR, 'static')
@@ -180,7 +179,20 @@ class SoundResource(AppResource):
         self.sound = sound
 
     def get(self, request):
-        return HTTPResponse(HTTPPreamble(headers={'Content-Type': 'audio/wav'}), body=self.sound)
+        status_code = httplib.OK
+        headers = {
+            'Accept-Range': 'bytes',
+            'Content-Type': 'audio/wav'
+        }
+        sound = self.sound
+        request_range = request.headers.get('Range')
+        file_size = len(self.sound)
+        body_range = parse_range_header(request_range, file_size)
+        if request_range is not None:
+            status_code = httplib.PARTIAL_CONTENT
+            headers['Content-Range'] = 'bytes %i-%i/%i' % (body_range[0], body_range[1], file_size)
+            sound = self.sound[body_range[0]:body_range[1]]
+        return HTTPResponse(HTTPPreamble(status_code=status_code, headers=headers), body=sound)
 
 
 class HomeResource(AppResource):
@@ -225,6 +237,7 @@ class ScribeApplication(Application):
 
         Application.__init__(self, {
             '': HomeResource(self),
+            'favicon.ico': StaticFileResource(os.path.join(STATIC_DIR, 'img', 'favicon.ico')),
             'sounds': EditsResource(self),
             'static': StaticFileResource(STATIC_DIR),
             'socket.io': FooResource(),

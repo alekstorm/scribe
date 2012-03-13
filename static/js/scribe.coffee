@@ -11,9 +11,9 @@ LINE_COLOR = Graphics.getRGB(0,0,255)
 LINE_HEIGHT = WAVEFORM_HEIGHT*2
 MARK_LINE_COLOR = Graphics.getRGB(0,255,0)
 MARK_LINE_HOVER_COLOR = Graphics.getRGB(255,127,0)
+PLAY_FADE_WIDTH = 100
 
 ZOOM_IN_SCALE = 0.25
-ZOOM_OUT_SCALE = 0.5
 
 zoom_start = null
 zoom_stop = null
@@ -27,8 +27,7 @@ selection = [0]
 socket = new io.connect('http://'+window.location.host)
 socket.on('disconnect', -> socket.socket.reconnect())
 
-#sound = new buzz.sound("#{url}/sound")
-#sound.load()
+sound = new buzz.sound("#{url}/sound", {preload: true})
 
 DisplayObject::bind = (type, handler) ->
     @bound ||= {}
@@ -49,12 +48,12 @@ DisplayObject::trigger = (type, event) ->
 
 
 class Transcribe extends Stage
-    constructor: (canvas) ->
+    constructor: (canvas, @base_stage) ->
         @initialize(canvas)
 
     initialize: (canvas) ->
         Stage.prototype.initialize.call(this, canvas)
-        @zoom = new Zoom(this)
+        @zoom = new Zoom(this, @base_stage)
         @addChild(@zoom)
 
         @horiz_cursor_line = new HorizCursorLine(this)
@@ -198,23 +197,51 @@ class WidgetLine extends Shape
         @cache(0, 0, 2, WAVEFORM_HEIGHT*2)
 
 
-class Zoom extends Container
+class PlayLine extends Shape
     constructor: (@stage) ->
+        @initialize()
+
+    initialize: ->
+        Shape.prototype.initialize.call(this, new Graphics()
+            .beginLinearGradientFill([Graphics.getRGB(255,0,0,0), Graphics.getRGB(255,0,0,0.8)], [0,1], 0, LINE_HEIGHT/2, PLAY_FADE_WIDTH, LINE_HEIGHT/2)
+            .drawRect(0, 0, PLAY_FADE_WIDTH, LINE_HEIGHT)
+        )
+        @cache(0, 0, PLAY_FADE_WIDTH, LINE_HEIGHT)
+
+
+class SelectionRect extends Shape
+    constructor: (@stage, x, width) ->
+        @initialize(x, width)
+
+    initialize: (x, width) ->
+        Shape.prototype.initialize.call(this, new Graphics()
+            .beginFill(Graphics.getRGB(0,0,255,0.3))
+            .rect(x, 0, width, WAVEFORM_HEIGHT*2)
+        )
+
+
+class Zoom extends Container
+    constructor: (@stage, @base_stage) ->
         @initialize()
 
     initialize: ->
         Container.prototype.initialize.call(this)
         @canvas = $(@stage.canvas)
         @waveform = new Shape(new Graphics())
+        @waveform.y = SLIDER_HEIGHT
         @y = SLIDER_HEIGHT
-        @addChild(@waveform)
+        @base_stage.addChild(@waveform)
         @spectrogram = new Shape(new Graphics())
-        @addChild(@spectrogram)
-        @spectrogram.y = WAVEFORM_HEIGHT
+        @base_stage.addChild(@spectrogram)
+        @spectrogram.y = SLIDER_HEIGHT+WAVEFORM_HEIGHT
 
         @loading_counter = 0
         @waveform_image_loaded = false
         @spectrogram_image_loaded = false
+
+        @play_line = new PlayLine()
+        @play_line.visible = false
+        @addChild(@play_line)
 
         @move(0, sound_info.duration)
 
@@ -224,16 +251,15 @@ class Zoom extends Container
             if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT and not @stage.mark_collection.hit_widget(down_stageX, stageY)?
                 drag_line = new DragLine(@stage)
                 @addChild(drag_line)
+                if @drag_rect?
+                    @removeChild(@drag_rect)
                 @drag_rect = null
                 move_handler = (move_event) =>
                     stageX = move_event.pageX-@canvas.offset().left
                     drag_line.move(stageX)
                     if @drag_rect?
                         @removeChild(@drag_rect)
-                    @drag_rect = new Shape(new Graphics()
-                        .beginFill(Graphics.getRGB(0,0,255,0.3))
-                        .rect(down_stageX, 0, stageX-down_stageX, WAVEFORM_HEIGHT*2)
-                    )
+                    @drag_rect = new SelectionRect(@stage, down_stageX, stageX-down_stageX)
                     @addChild(@drag_rect)
                 up_handler = (up_event) =>
                     stageX = up_event.pageX-@canvas.offset().left
@@ -259,18 +285,41 @@ class Zoom extends Container
                 @canvas.mousemove(move_handler)
                 @canvas.mouseup(up_handler)
 
-        $(document).keypress (event) =>
+        $(document).keydown (event) =>
             if event.which == 9 # tab
-                play
-            else if event.which == 32 # spacebar
+                if sound.isPaused() or sound.isEnded() # TODO bug in buzz
+                    if selection.length == 2
+                        @play(selection[0], selection[1])
+                    else
+                        @play(zoom_start, zoom_stop)
+                else
+                    sound.stop()
+                return false
+            if event.which == 32 # spacebar
                 if selection.length == 2
                     @removeChild(@drag_rect)
+                    @drag_rect = null
                     @move(selection[0], selection[1])
                 else
                     zoom_size = (zoom_stop - zoom_start)*ZOOM_IN_SCALE
                     @move(Math.max(0, zoom_start+zoom_size), Math.min(sound_info.duration, zoom_stop-zoom_size))
                 selection = [zoom_start]
                 return false
+
+    play: (start, stop) ->
+        update_play_line = =>
+            if not sound.isPaused() and not sound.isEnded()
+                @play_line.x = (sound.getTime()-zoom_start)/(zoom_stop-zoom_start)*@canvas.width() - PLAY_FADE_WIDTH
+                setTimeout(update_play_line, 10)
+            else
+                @play_line.visible = false
+            if sound.getTime() >= stop
+                sound.stop()
+            @stage.update()
+        @play_line.visible = true
+        sound.setTime(start)
+        sound.play()
+        update_play_line()
 
     move: (start, stop) ->
         cur_counter = ++@loading_counter
@@ -280,11 +329,18 @@ class Zoom extends Container
                 @spectrogram_image_loaded = false
                 zoom_start = Math.min(start, stop)
                 zoom_stop = Math.max(start, stop)
+
+                if @drag_rect?
+                    @removeChild(@drag_rect)
+                    x = (selection[0]-zoom_start)/(zoom_stop-zoom_start)*@canvas.width()
+                    @drag_rect = new SelectionRect(@stage, x, (selection[1]-zoom_start)/(zoom_stop-zoom_start)*@canvas.width()-x)
+                    @addChild(@drag_rect)
                 @trigger('move')
 
                 @waveform.graphics.drawImage(waveform_image, 0, 0, @canvas.width(), WAVEFORM_HEIGHT)
                 @spectrogram.graphics.drawImage(spectrogram_image, 0, 0, @canvas.width(), WAVEFORM_HEIGHT)
                 @stage.update()
+                @base_stage.update()
 
         waveform_image = new Image()
         waveform_image.onload = =>
@@ -538,15 +594,14 @@ sync_mark = (mark) ->
 $ ->
     container = $('#container')
     active_canvas = $('#active')
-    #base_canvas = $('#base')
+    base_canvas = $('#base')
     canvas_offset = active_canvas.offset()
 
     zoom_start = 0
     zoom_stop = sound_info.duration
     canvas_scale = sound_info.duration/active_canvas.width()
 
-    active_stage = new Transcribe(active_canvas[0])
-    #base_stage = new Stage(base_canvas[0])
+    active_stage = new Transcribe(active_canvas[0], new Stage(base_canvas[0]))
 
     hover_mark_line = null
 
@@ -615,9 +670,5 @@ $ ->
             socket.emit 'send_message',
                 sender: sender
                 message: message
-
-    $('button').click ->
-        zoom_size = (zoom_stop - zoom_start)*ZOOM_OUT_SCALE
-        active_stage.zoom.move(Math.max(0, zoom_start-zoom_size), Math.min(sound_info.duration, zoom_stop+zoom_size))
 
     active_stage.update()

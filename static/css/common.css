@@ -55,8 +55,3 @@ canvas {
     width: 250px;
     margin: 0;
 }
-
-#zoom-out {
-    clear: both;
-    display: block;
-}
