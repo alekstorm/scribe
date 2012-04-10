@@ -1,4 +1,5 @@
 # FIXME re-enable gzip encoding
+# TODO handle out-of-order messages (modification before adding, etc - timeout while waiting?)
 import datetime
 from   gridfs import GridFS
 import httplib

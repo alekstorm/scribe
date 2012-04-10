@@ -55,3 +55,19 @@ canvas {
     width: 250px;
     margin: 0;
 }
+
+.cursor-data {
+    float: left;
+    padding: 5px;
+    background-color: grey;
+    border: 1px solid black;
+    list-style: none;
+    visibility: hidden;
+    cursor: crosshair;
+
+    -moz-user-select: -moz-none;
+    -khtml-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}

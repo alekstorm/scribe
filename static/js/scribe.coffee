@@ -56,11 +56,6 @@ class Transcribe extends Stage
         @zoom = new Zoom(this, @base_stage)
         @addChild(@zoom)
 
-        @horiz_cursor_line = new HorizCursorLine(this)
-        @addChild(@horiz_cursor_line)
-        @vert_cursor_line = new VertCursorLine(this)
-        @addChild(@vert_cursor_line)
-
         @slider = new Slider(this)
         @addChild(@slider)
 
@@ -94,7 +89,7 @@ class Transcribe extends Stage
 
     remove_cursor: (key) ->
         for i in [0...@cursors.length]
-            if @cursors.key == key
+            if @cursors[i].key == key
                 @cursors.splice(i, 1)
                 return
 
@@ -114,7 +109,6 @@ class HorizCursorLine extends Shape
 
         Shape.prototype.initialize.call(this, g)
         @cache(0, 0, 2, LINE_HEIGHT)
-        @y = SLIDER_HEIGHT
         @visible = false
         canvas = $(@stage.canvas)
 
@@ -128,7 +122,7 @@ class HorizCursorLine extends Shape
             @visible = false
             if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT
                 @visible = true
-                @x = stageX
+                @x = @parent.globalToLocal(stageX, 0).x
             @stage.update()
 
 
@@ -159,7 +153,7 @@ class VertCursorLine extends Shape
             @visible = false
             if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT
                 @visible = true
-                @y = stageY
+                @y = @parent.globalToLocal(0, stageY).y
             @stage.update()
 
 
@@ -195,6 +189,10 @@ class WidgetLine extends Shape
             .lineTo(0.5, WAVEFORM_HEIGHT*2+stack_offset)
         )
         @cache(0, 0, 2, WAVEFORM_HEIGHT*2)
+
+
+class Widget
+    constructor: (@mark, @line, @label) ->
 
 
 class PlayLine extends Shape
@@ -239,38 +237,88 @@ class Zoom extends Container
         @waveform_image_loaded = false
         @spectrogram_image_loaded = false
 
+        @horiz_cursor_line = new HorizCursorLine(@stage)
+        @addChild(@horiz_cursor_line)
+        @vert_cursor_line = new VertCursorLine(@stage)
+        @addChild(@vert_cursor_line)
+
+        container = $('#container')
+        @cursor_data = $('<ul class="cursor-data">').appendTo(container)
+
         @play_line = new PlayLine()
         @play_line.visible = false
         @addChild(@play_line)
 
         @move(0, sound_info.duration)
 
+        @canvas.mouseout (event) =>
+            @cursor_data.css('visibility', 'hidden')
+
+        container.mousemove (event) =>
+            stageX = event.pageX-@canvas.offset().left
+            stageY = event.pageY-@canvas.offset().top
+            @cursor_data.css('visibility', 'hidden')
+            if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT and 0 <= stageX <= @canvas.width()
+                cur_scale = (zoom_stop - zoom_start)/@canvas.width()
+                cur_time = zoom_start+stageX*cur_scale
+                @cursor_data.empty()
+                @cursor_data.append("<li unselectable=\"on\">Time: #{cur_time.toFixed(9)}</li>")
+                if selection.length == 2
+                    @cursor_data.append("<li unselectable=\"on\">Length: #{(selection[1]-selection[0]).toFixed(9)}</li>")
+                @cursor_data.css('visibility', 'visible')
+                @cursor_data.offset({left: event.pageX+5, top: event.pageY+5})
+
+        $(document).mousedown (event) =>
+            if @drag_rect?
+                @removeChild(@drag_rect)
+            @stage.update()
+            @drag_rect = null
+            selection = [0]
+
         @canvas.mousedown (down_event) =>
+            down_event.stopPropagation()
             down_stageX = down_event.pageX-@canvas.offset().left
             stageY = down_event.pageY-@canvas.offset().top
-            if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT and not @stage.mark_collection.hit_widget(down_stageX, stageY)?
-                drag_line = new DragLine(@stage)
-                @addChild(drag_line)
-                if @drag_rect?
-                    @removeChild(@drag_rect)
-                @drag_rect = null
-                move_handler = (move_event) =>
-                    stageX = move_event.pageX-@canvas.offset().left
-                    drag_line.move(stageX)
+            if SLIDER_HEIGHT < stageY < GRAPH_HEIGHT
+                if (widget = @stage.mark_collection.hit_widget(down_stageX, stageY))?
+                    @stage.modify_cursor(widget.mark.id, new Rectangle(0, 0, @canvas.width(), @canvas.height()))
+                    move_handler = (move_event) =>
+                        widget.line.x = move_event.pageX-@canvas.offset().left
+                        widget.label.offset(
+                            left: @canvas.offset().left+widget.line.x
+                            top: widget.label.offset().top
+                        )
+                        @stage.update()
+                    up_handler = (up_event) =>
+                        widget.mark.pos[0] = zoom_start+widget.line.x*canvas_scale
+                        sync_mark(widget.mark)
+                        @stage.mark_collection.move_widgets()
+                        @canvas.unbind('mouseup', up_handler)
+                        @canvas.unbind('mousemove', move_handler)
+                else
+                    drag_line = new DragLine(@stage)
+                    @addChild(drag_line)
                     if @drag_rect?
                         @removeChild(@drag_rect)
-                    @drag_rect = new SelectionRect(@stage, down_stageX, stageX-down_stageX)
-                    @addChild(@drag_rect)
-                up_handler = (up_event) =>
-                    stageX = up_event.pageX-@canvas.offset().left
-                    cur_scale = (zoom_stop - zoom_start)/@canvas.width()
-                    if up_event.pageX != down_event.pageX
+                    @drag_rect = null
+                    move_handler = (move_event) =>
+                        stageX = move_event.pageX-@canvas.offset().left
+                        drag_line.move(stageX)
+                        if @drag_rect?
+                            @removeChild(@drag_rect)
+                        @drag_rect = new SelectionRect(@stage, down_stageX, stageX-down_stageX)
+                        @addChild(@drag_rect)
+                        @stage.update()
+                        cur_scale = (zoom_stop - zoom_start)/@canvas.width()
                         selection = [down_stageX*cur_scale+zoom_start, stageX*cur_scale+zoom_start]
                         selection.sort()
-                    else
-                        selection = [stageX*cur_scale+zoom_start]
+                    up_handler = (up_event) =>
+                        stageX = up_event.pageX-@canvas.offset().left
+                        cur_scale = (zoom_stop - zoom_start)/@canvas.width()
+                        if up_event.pageX == down_event.pageX
+                            selection = [stageX*cur_scale+zoom_start]
                         mark =
-                            pos: selection[0]
+                            pos: selection
                             label: ''
                             id: "#{sound_info.user_id}_#{sound_info.mark_counter++}"
                         save_mark(mark)
@@ -279,12 +327,16 @@ class Zoom extends Container
                         for widget in @stage.mark_collection.widgets
                             if widget.mark.id == mark.id
                                 widget.label.children('span').focus()
-                    @removeChild(drag_line)
-                    @canvas.unbind('mouseup', up_handler)
-                    @canvas.unbind('mousemove', move_handler)
+                                break
+                        @removeChild(drag_line)
+                        @stage.update()
+                        @canvas.unbind('mouseup', up_handler)
+                        @canvas.unbind('mousemove', move_handler)
+                @stage.update()
                 @canvas.mousemove(move_handler)
                 @canvas.mouseup(up_handler)
 
+        # TODO handle esc
         $(document).keydown (event) =>
             if event.which == 9 # tab
                 if sound.isPaused() or sound.isEnded() # TODO bug in buzz
@@ -381,45 +433,50 @@ class MarkCollection extends Container
                     return @move_widgets()
 
     update_widget: (widget) ->
-        mark =
-            id: widget.mark.id
-            pos: widget.mark.pos
-            label: widget.label.children('span').text()
-        save_mark(mark)
-        sync_mark(mark)
+        widget.mark.label = widget.label.children('span').text()
+        sync_mark(widget.mark)
 
     hide_widget: (widget) ->
         widget.label.remove()
+        @stage.remove_cursor(widget.mark.id)
         @removeChild(widget.line)
         @stage.update()
         @widgets.splice(@widgets.indexOf(widget), 1)
 
     hit_widget: (stageX, stageY) ->
         for widget in @widgets
-            if widget.line.x-3 <= stageX <= widget.line.x+3 and SLIDER_HEIGHT < stageY < GRAPH_HEIGHT
+            if widget.line.x-3 <= stageX <= widget.line.x+4 and SLIDER_HEIGHT < stageY < GRAPH_HEIGHT
                 return widget
 
     move_widgets: ->
         while @widgets.length > 0
+            @stage.remove_cursor(@widgets[0].mark.id)
             @hide_widget(@widgets[0])
         last_height = 0
         last_widget = null
-        sound_info.marks.sort((a,b) -> b.pos - a.pos)
+        sound_info.marks.sort((a,b) -> b.pos[0] - a.pos[0])
         canvas = $(@stage.canvas)
         for mark in sound_info.marks
             do (mark) =>
-                if zoom_start < mark.pos < zoom_stop
-                    left_offset = (mark.pos-zoom_start)/(zoom_stop-zoom_start)*canvas.width()
+                if zoom_start < mark.pos[0] < zoom_stop
+                    left_offset = (mark.pos[0]-zoom_start)/(zoom_stop-zoom_start)*canvas.width()
                     input = $('<span contenteditable="true">')
                         .text(mark.label)
-                        .keypress((event) =>
+                        .keydown((event) =>
+                            event.stopPropagation()
+                        ).keypress((event) =>
                             event.stopPropagation()
                             if event.which == 13
                                 input.blur()
                                 return false
                         ).blur(=>
-                            @update_widget(widget)
-                            input.parent().removeClass('focus')
+                            if widget.label.text().length == 0
+                                delete_mark(widget.mark.id)
+                                @move_widgets()
+                                sync_delete_mark(widget.mark.id)
+                            else
+                                @update_widget(widget)
+                                input.parent().removeClass('focus')
                         ).focus(=>
                             input.parent().addClass('focus')
                         )
@@ -428,7 +485,7 @@ class MarkCollection extends Container
                             delete_mark(mark.id)
                             @hide_widget(widget)
                             @move_widgets()
-                            socket.emit('delete_mark', {sound: sound_info._id, id: mark.id})
+                            sync_delete_mark(widget.mark.id)
                     label = $('<div>')
                         .addClass('label')
                         .append(input)
@@ -438,24 +495,28 @@ class MarkCollection extends Container
                             left: (canvas_offset.left+left_offset)+'px'
                             top: (canvas_offset.top+GRAPH_HEIGHT)+'px'
                         )
-                    widget = {label: label, mark: mark}
-                    @widgets.push(widget)
+                        .children('span').css({'min-width': (if mark.pos.length == 1 then '10' else '50')+'px'})
 
-                    offset = widget.label.offset()
-                    if last_widget? and offset.left+widget.label.width() >= last_widget.label.offset().left
-                        stack_offset = (++last_height)*widget.label.height()
+                    offset = label.offset()
+                    if last_widget? and offset.left+label.width() >= last_widget.label.offset().left
+                        stack_offset = (++last_height)*label.height()
                     else
                         last_height = 0
                         stack_offset = 0
 
-                    widget.label.offset(
+                    label.offset(
                         left: offset.left
                         top: offset.top+stack_offset
                     )
 
-                    widget.line = new WidgetLine(@stage, stack_offset, Graphics.getRGB(0,255,0))
-                    widget.line.x = left_offset
-                    @addChild(widget.line)
+                    @stage.add_cursor(mark.id, 100, new Rectangle(left_offset-3, @y, 6, WAVEFORM_HEIGHT*2), 'w-resize')
+
+                    line = new WidgetLine(@stage, stack_offset, Graphics.getRGB(0,255,0))
+                    line.x = left_offset
+                    @addChild(line)
+
+                    widget = new Widget(mark, line, label)
+                    @widgets.push(widget)
 
                     last_widget = widget
         @stage.update()
@@ -493,10 +554,11 @@ class Slider extends Container
                     canvas.unbind('mousemove', move_handler)
                 $(document).mouseup(up_handler)
                 canvas.mousemove(move_handler)
-            else if @slider_handle and zoom_start/canvas_scale-SLIDER_SIDE_WIDTH <= down_stageX <= zoom_start/canvas_scale+SLIDER_SIDE_WIDTH
-                resize_left = true
-            else if @slider_handle and zoom_stop/canvas_scale-SLIDER_SIDE_WIDTH <= down_stageX <= zoom_stop/canvas_scale+SLIDER_SIDE_WIDTH
-                resize_left = false
+            else if down_stageY <= SLIDER_HEIGHT
+                if @slider_handle and zoom_start/canvas_scale-SLIDER_SIDE_WIDTH <= down_stageX <= zoom_start/canvas_scale+SLIDER_SIDE_WIDTH
+                    resize_left = true
+                else if @slider_handle and zoom_stop/canvas_scale-SLIDER_SIDE_WIDTH <= down_stageX <= zoom_stop/canvas_scale+SLIDER_SIDE_WIDTH
+                    resize_left = false
             if resize_left?
                 start = zoom_start
                 stop = zoom_stop
@@ -587,10 +649,13 @@ sync_mark = (mark) ->
         pos: mark.pos
         label: mark.label
 
-# TODO z-indexed events
-# TODO displayobject-specific events
-# TODO transparent active/inactive (or more) stages
+sync_delete_mark = (id) ->
+    socket.emit 'delete_mark', 
+        sound: sound_info._id
+        id: id
 
+# TODO displayobject-specific, z-indexed events
+# TODO transparent active/inactive (or more) stages
 $ ->
     container = $('#container')
     active_canvas = $('#active')
@@ -603,63 +668,11 @@ $ ->
 
     active_stage = new Transcribe(active_canvas[0], new Stage(base_canvas[0]))
 
-    hover_mark_line = null
-
-    ###
-    active_canvas.mousemove (event) ->
-        stageX = event.pageX-canvas_offset.left
-        stageY = event.pageY-canvas_offset.top
-        if dragging
-            active_stage.addChild(drag_rect)
-        else if dragging_slider
-        else if dragging_line?
-            dragging_line.line.x = stageX
-            dragging_line.label.css(left: (canvas_offset.left+stageX)+'px')
-
-        cursor = if update_hover_mark_line = hit_mark_line(stageX, stageY)
-            hover_mark_line = update_hover_mark_line
-            line_color = MARK_LINE_HOVER_COLOR
-            cursor_line.visible = false
-            'e-resize'
-        else
-            if hover_mark_line?
-                update_hover_mark_line = hover_mark_line
-                line_color = MARK_LINE_COLOR
-                hover_mark_line = null
-            if slider_handle and hit_mouse(slider_handle, stageX, stageY)
-                'move'
-            else if dragging
-                'e-resize'
-            else if stageY < GRAPH_HEIGHT
-                'crosshair'
-            else
-                'default'
-
-        if update_hover_mark_line
-            stack_offset = update_hover_mark_line.label.offset().top-active_canvas.offset().top-GRAPH_HEIGHT
-            update_hover_mark_line.line.graphics = WidgetLine(@stage, stack_offset, line_color).graphics
-
-        active_canvas.css('cursor', cursor)
-        active_stage.update()
-
-    # TODO displayobject-specific events
-
-    $(document).mouseup (event) ->
-        stageX = event.pageX-canvas_offset.left
-        cur_scale = (zoom_stop - zoom_start)/active_canvas.width()
-
-        if dragging and drag_start != stageX
-        else if dragging_slider
-        else if dragging_line?
-            dragging_line.mark.pos = dragging_line.line.x*cur_scale+zoom_start
-            update_widget(dragging_line)
-            move_widgets()
-    ###
-
     add_message = (sender, message) ->
-       $('<p>').text("#{sender}: #{message}").appendTo($('#chat-messages'))
+        $('<p>').text("#{sender}: #{message}").appendTo($('#chat-messages'))
 
-    socket.on 'receive_message', (data) -> add_message(data.sender, data.message)
+    socket.on 'receive_message', (data) ->
+        add_message(data.sender, data.message)
 
     $('#chat-input').keypress (event) ->
         if event.which == 13
